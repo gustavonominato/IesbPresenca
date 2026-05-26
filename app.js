@@ -278,15 +278,16 @@ function imprimirRelatorioConsolidado(dados) {
 
       <table class="table table-bordered table-striped table-sm align-middle">
         <thead class="table-dark">
-          <tr>
-            <th>Nome</th>
-            <th>Sobrenome</th>
-            ${datasAulas.map(data => `
-              <th class="text-center coluna-data-vertical">
-                <span>${formatarData(data)}</span>
-              </th>
-            `).join('')}
-          </tr>
+        <tr>
+          <th>Nome</th>
+          <th>Sobrenome</th>
+          ${datasAulas.map(data => `
+            <th class="text-center coluna-data-vertical">
+              <span>${formatarData(data)}</span>
+            </th>
+          `).join('')}
+          <th>Faltas</th>
+        </tr>
         </thead>
         <tbody>
           ${consolidadoPorAluno.map(aluno => `
@@ -300,6 +301,9 @@ function imprimirRelatorioConsolidado(dados) {
                 ? `<td class="text-center bg-success text-white fw-bold">✓</td>`
                 : `<td class="text-center bg-danger text-white fw-bold">–</td>`;
         }).join('')}
+              <td class="text-center fw-bold">
+                ${calcularFaltasPonderadas(aluno, datasAulas)}
+              </td>
             </tr>
           `).join('')}
         </tbody>
@@ -684,3 +688,8 @@ collapseResumoArquivos.addEventListener('show.bs.collapse', () => {
 collapseResumoArquivos.addEventListener('hide.bs.collapse', () => {
     iconeCollapseResumoArquivos.innerText = '▶';
 });
+
+function calcularFaltasPonderadas(aluno, datasAulas) {
+    const quantidadeFaltas = datasAulas.filter(data => aluno.presencasPorData[data] !== 1).length;
+    return quantidadeFaltas * 1.5;
+}
