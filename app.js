@@ -43,11 +43,35 @@ btnProcessar.addEventListener('click', async () => {
         btnProcessar.disabled = true;
         btnProcessar.innerText = 'Processando...';
 
+        console.log('Iniciando processamento dos arquivos Excel...');
+        console.log('Total de arquivos selecionados:', files.length);
+        console.log('Total de arquivos Excel válidos:', arquivosExcel.length);
+        console.table(arquivosExcel.map(file => ({
+            nome: file.name,
+            caminho: file.webkitRelativePath,
+            tamanhoBytes: file.size,
+            tipo: file.type,
+        })));
+
         const promessas = arquivosExcel.map(file => {
             const contexto = obterContextoDoArquivo(file);
 
+            console.log('Processando arquivo:', {
+                nome: file.name,
+                caminho: file.webkitRelativePath,
+                tamanhoBytes: file.size,
+                tipo: file.type,
+                contexto,
+            });
+
             return processarArquivoExcel(file, contexto)
                 .then(linhas => {
+                    console.log('Arquivo processado com sucesso:', {
+                        nome: file.name,
+                        caminho: file.webkitRelativePath,
+                        linhas: linhas.length,
+                    });
+
                     dadosConsolidados.push(...linhas);
 
                     imprimirResumoArquivo({
@@ -57,6 +81,20 @@ btnProcessar.addEventListener('click', async () => {
                         data: formatarData(contexto.data),
                         linhas: linhas.length,
                     });
+                })
+                .catch(error => {
+                    console.error('Erro ao processar arquivo:', {
+                        nome: file.name,
+                        caminho: file.webkitRelativePath,
+                        tamanhoBytes: file.size,
+                        tipo: file.type,
+                        contexto,
+                        error,
+                    });
+
+                    throw new Error(
+                        `Erro ao processar o arquivo "${file.webkitRelativePath || file.name}": ${obterMensagemErro(error)}`
+                    );
                 });
         });
 
@@ -72,8 +110,11 @@ btnProcessar.addEventListener('click', async () => {
             'success'
         );
     } catch (error) {
-        console.error(error);
-        exibirAlerta('Erro ao processar os arquivos Excel.', 'danger');
+        console.error('Erro geral no processamento:', error);
+        console.error('Mensagem:', error?.message);
+        console.error('Stack:', error?.stack);
+
+        exibirAlerta(`Erro ao processar os arquivos Excel: ${obterMensagemErro(error)}`, 'danger');
     } finally {
         btnProcessar.disabled = false;
         btnProcessar.innerText = 'Processar';
@@ -111,17 +152,76 @@ btnExportar.addEventListener('click', () => {
 });
 
 async function processarArquivoExcel(file, contexto) {
-    const arrayBuffer = await file.arrayBuffer();
+    console.log('Lendo arrayBuffer do arquivo:', file.webkitRelativePath || file.name);
 
-    const workbook = XLSX.read(arrayBuffer, {
-        type: 'array',
+    let arrayBuffer;
+
+    try {
+        arrayBuffer = await file.arrayBuffer();
+    } catch (error) {
+        console.error('Falha ao ler arrayBuffer:', {
+            arquivo: file.webkitRelativePath || file.name,
+            error,
+        });
+        throw new Error(`Falha ao ler o arquivo no navegador. ${obterMensagemErro(error)}`);
+    }
+
+    console.log('arrayBuffer lido com sucesso:', {
+        arquivo: file.webkitRelativePath || file.name,
+        bytes: arrayBuffer.byteLength,
+    });
+
+    let workbook;
+
+    try {
+        workbook = XLSX.read(arrayBuffer, {
+            type: 'array',
+        });
+    } catch (error) {
+        console.error('Falha ao interpretar Excel com XLSX.read:', {
+            arquivo: file.webkitRelativePath || file.name,
+            error,
+        });
+        throw new Error(`Falha ao interpretar o Excel. O arquivo pode estar corrompido ou em formato incompatível. ${obterMensagemErro(error)}`);
+    }
+
+    console.log('Workbook carregado:', {
+        arquivo: file.webkitRelativePath || file.name,
+        abas: workbook.SheetNames,
     });
 
     const primeiraAba = workbook.SheetNames[0];
+
+    if (!primeiraAba) {
+        throw new Error('O arquivo não possui abas para leitura.');
+    }
+
     const sheet = workbook.Sheets[primeiraAba];
 
-    const linhas = XLSX.utils.sheet_to_json(sheet, {
-        defval: '',
+    if (!sheet) {
+        throw new Error(`A primeira aba "${primeiraAba}" não pôde ser encontrada.`);
+    }
+
+    let linhas;
+
+    try {
+        linhas = XLSX.utils.sheet_to_json(sheet, {
+            defval: '',
+        });
+    } catch (error) {
+        console.error('Falha ao converter aba em JSON:', {
+            arquivo: file.webkitRelativePath || file.name,
+            aba: primeiraAba,
+            error,
+        });
+        throw new Error(`Falha ao converter a aba "${primeiraAba}" para JSON. ${obterMensagemErro(error)}`);
+    }
+
+    console.log('Linhas extraídas:', {
+        arquivo: file.webkitRelativePath || file.name,
+        aba: primeiraAba,
+        quantidade: linhas.length,
+        primeiraLinha: linhas[0] || null,
     });
 
     return linhas.map((linha, index) => {
@@ -140,6 +240,18 @@ async function processarArquivoExcel(file, contexto) {
             numeroLinha: index + 2,
         };
     });
+}
+
+function obterMensagemErro(error) {
+    if (!error) {
+        return 'Erro desconhecido.';
+    }
+
+    if (error.message) {
+        return error.message;
+    }
+
+    return String(error);
 }
 
 function normalizarLinha(linha) {
