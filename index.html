@@ -10,6 +10,34 @@
             href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
             rel="stylesheet"
     />
+    <style>
+        .table {
+            border-color: black !important;
+        }
+        .table thead.table-dark {
+            --bs-table-bg: #0d6efd;
+            --bs-table-color: #fff;
+        }
+
+        .table thead.table-dark th {
+            border-color: black !important;
+        }
+
+        .coluna-data-vertical {
+            width: 42px;
+            min-width: 42px;
+            max-width: 42px;
+            padding: 8px 0 !important;
+            vertical-align: top !important;
+            white-space: nowrap;
+        }
+
+        .coluna-data-vertical span {
+            writing-mode: vertical-rl;
+            transform: rotate(180deg);
+            display: inline-block;
+        }
+    </style>
 </head>
 
 <body class="bg-light">
@@ -46,16 +74,33 @@
 
             <hr />
 
-            <h4>Resumo dos arquivos</h4>
-            <div id="resumoArquivos" class="mb-4"></div>
+            <div id="blocoResumoArquivos" class="d-none">
+                <button
+                        id="btnCollapseResumoArquivos"
+                        class="btn btn-link text-decoration-none p-0 mb-3"
+                        type="button"
+                        data-bs-toggle="collapse"
+                        data-bs-target="#collapseResumoArquivos"
+                        aria-expanded="false"
+                        aria-controls="collapseResumoArquivos"
+                >
+                    <span id="iconeCollapseResumoArquivos" class="me-1">▶</span>
+                    <strong>Resumo dos arquivos</strong>
+                </button>
 
-            <h4>Relatório consolidado</h4>
+                <div class="collapse" id="collapseResumoArquivos">
+                    <div id="resumoArquivos" class="mb-4"></div>
+                </div>
+            </div>
+
             <div id="relatorioFinal" class="table-responsive"></div>
         </div>
     </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="./app.js"></script>
 </body>
 </html>

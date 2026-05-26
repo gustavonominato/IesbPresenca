@@ -5,7 +5,15 @@ const alerta = document.getElementById('alerta');
 const resumoArquivos = document.getElementById('resumoArquivos');
 const relatorioFinal = document.getElementById('relatorioFinal');
 
+const blocoResumoArquivos = document.getElementById('blocoResumoArquivos');
+const collapseResumoArquivos = document.getElementById('collapseResumoArquivos');
+const iconeCollapseResumoArquivos = document.getElementById('iconeCollapseResumoArquivos');
+
 let dadosConsolidados = [];
+let dataSelecionada = null;
+let graficoStatus = null;
+let modoResumoAluno = false;
+let modoConsolidadoAluno = false;
 
 btnProcessar.addEventListener('click', async () => {
     limparTela();
@@ -41,13 +49,14 @@ btnProcessar.addEventListener('click', async () => {
                 arquivo: file.name,
                 caminho: file.webkitRelativePath,
                 pasta: contexto.nomePasta,
-                data: contexto.data,
+                data: formatarData(contexto.data),
                 linhas: linhas.length,
             });
         }
 
         imprimirRelatorioConsolidado(dadosConsolidados);
 
+        blocoResumoArquivos.classList.remove('d-none');
         btnExportar.classList.remove('d-none');
 
         exibirAlerta(
@@ -69,12 +78,28 @@ btnExportar.addEventListener('click', () => {
         return;
     }
 
-    const worksheet = XLSX.utils.json_to_sheet(dadosConsolidados);
+    const dadosParaExportar = ordenarPorDataENome(
+
+        dataSelecionada
+
+            ? dadosConsolidados.filter(linha => linha.DataOriginal === dataSelecionada)
+
+            : dadosConsolidados
+
+    );
+
+    const dadosTratados = dadosParaExportar.map(removerColunasOcultasEInternas);
+
+    const worksheet = XLSX.utils.json_to_sheet(dadosTratados);
     const workbook = XLSX.utils.book_new();
 
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Consolidado');
+    XLSX.utils.book_append_sheet(workbook, worksheet, dataSelecionada ? 'Lista de Presença' : 'Consolidado');
 
-    XLSX.writeFile(workbook, 'relatorio-consolidado.xlsx');
+    const nomeArquivo = dataSelecionada
+        ? `lista-presenca-${dataSelecionada}.xlsx`
+        : 'relatorio-consolidado.xlsx';
+
+    XLSX.writeFile(workbook, nomeArquivo);
 });
 
 async function processarArquivoExcel(file, contexto) {
@@ -95,9 +120,12 @@ async function processarArquivoExcel(file, contexto) {
         const duracaoMinutos = converterDuracaoParaMinutos(linha['Duração']);
         const status = duracaoMinutos >= 20 ? 'Presente' : 'Falta';
 
+        const linhaNormalizada = normalizarLinha(linha);
+
         return {
-            Data: contexto.data,
-            ...linha,
+            DataOriginal: contexto.data,
+            Data: formatarData(contexto.data),
+            ...linhaNormalizada,
             Status: status,
             pastaOrigem: contexto.nomePasta,
             arquivoOrigem: file.name,
@@ -106,15 +134,354 @@ async function processarArquivoExcel(file, contexto) {
     });
 }
 
+function normalizarLinha(linha) {
+    const novaLinha = {};
+
+    Object.keys(linha).forEach(coluna => {
+        const nomeNormalizado = coluna === 'Enviar e-mail' ? 'e-mail' : coluna;
+        novaLinha[nomeNormalizado] = linha[coluna];
+    });
+
+    return novaLinha;
+}
+
+function ordenarPorDataENome(dados) {
+    return [...dados].sort((a, b) => {
+        const dataA = a.DataOriginal || '';
+        const dataB = b.DataOriginal || '';
+
+        if (dataA !== dataB) {
+            return dataA.localeCompare(dataB);
+        }
+
+        const nomeA = obterNomeAluno(a);
+        const nomeB = obterNomeAluno(b);
+
+        return nomeA.localeCompare(nomeB, 'pt-BR', {
+            sensitivity: 'base',
+        });
+    });
+}
+
+function obterNomeAluno(linha) {
+    return String(
+        linha['Nome'] ||
+        linha['Nome completo'] ||
+        linha['Primeiro nome'] ||
+        ''
+    ).trim();
+}
+
+function montarResumoPorAluno(dados, totalAulas) {
+    const mapa = {};
+
+    dados.forEach(linha => {
+        const nome = String(linha['Nome'] || '').trim();
+        const sobrenome = String(linha['Sobrenome'] || '').trim();
+
+        const chave = `${nome}|${sobrenome}`.toLowerCase();
+
+        if (!mapa[chave]) {
+            mapa[chave] = {
+                nome,
+                sobrenome,
+                presenca: 0,
+                falta: 0,
+                participacoes: 0,
+                total: totalAulas,
+                percentual: '0.00',
+            };
+        }
+
+        if (linha.Status === 'Presente') {
+            mapa[chave].presenca++;
+        }
+
+        if (linha.Status === 'Falta') {
+            mapa[chave].falta++;
+        }
+
+        mapa[chave].participacoes++;
+    });
+
+    Object.values(mapa).forEach(aluno => {
+        aluno.percentual = totalAulas > 0
+            ? ((aluno.presenca / totalAulas) * 100).toFixed(2)
+            : '0.00';
+    });
+
+    return Object.values(mapa).sort((a, b) => {
+        const nomeA = `${a.nome} ${a.sobrenome}`;
+        const nomeB = `${b.nome} ${b.sobrenome}`;
+
+        return nomeA.localeCompare(nomeB, 'pt-BR', {
+            sensitivity: 'base',
+        });
+    });
+}
+
+function imprimirRelatorioConsolidado(dados) {
+    if (!dados.length) {
+        relatorioFinal.innerHTML = `
+      <div class="alert alert-warning">
+        Nenhum dado encontrado.
+      </div>
+    `;
+        return;
+    }
+
+    const datas = obterDatasDisponiveis(dados);
+
+    let html = `
+    <div class="mb-3">
+      <button 
+        class="btn ${modoConsolidadoAluno ? 'btn-primary' : 'btn-outline-primary'} btn-sm me-2 mb-2"
+        onclick="selecionarConsolidadoAluno()"
+      >
+        Consolidado por aluno
+      </button>
+
+      <button 
+        class="btn ${modoResumoAluno ? 'btn-primary' : 'btn-outline-primary'} btn-sm me-2 mb-2"
+        onclick="selecionarResumoAluno()"
+      >
+        Resumo por Aluno
+      </button>
+
+      <button 
+        class="btn ${dataSelecionada === null && !modoResumoAluno && !modoConsolidadoAluno ? 'btn-primary' : 'btn-outline-primary'} btn-sm me-2 mb-2"
+        onclick="selecionarData(null)"
+      >
+        Todos
+      </button>
+
+      ${datas.map(data => `
+        <button 
+          class="btn ${dataSelecionada === data && !modoResumoAluno && !modoConsolidadoAluno ? 'btn-primary' : 'btn-outline-primary'} btn-sm me-2 mb-2"
+          onclick="selecionarData('${data}')"
+        >
+          ${formatarData(data)}
+        </button>
+      `).join('')}
+    </div>
+  `;
+
+    if (modoConsolidadoAluno) {
+        const datasAulas = obterDatasDisponiveis(dados);
+        const consolidadoPorAluno = montarConsolidadoPorAluno(dados, datasAulas);
+
+        html += `
+      <h4 class="mb-3">Consolidado por aluno</h4>
+
+      <p><strong>Total de alunos:</strong> ${consolidadoPorAluno.length}</p>
+      <p><strong>Total de aulas ministradas:</strong> ${datasAulas.length}</p>
+
+      <table class="table table-bordered table-striped table-sm align-middle">
+        <thead class="table-dark">
+          <tr>
+            <th>Nome</th>
+            <th>Sobrenome</th>
+            ${datasAulas.map(data => `
+              <th class="text-center coluna-data-vertical">
+                <span>${formatarData(data)}</span>
+              </th>
+            `).join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${consolidadoPorAluno.map(aluno => `
+            <tr>
+              <td>${aluno.nome}</td>
+              <td>${aluno.sobrenome}</td>
+              ${datasAulas.map(data => {
+            const presente = aluno.presencasPorData[data] === 1;
+
+            return presente
+                ? `<td class="text-center bg-success text-white fw-bold">✓</td>`
+                : `<td class="text-center bg-danger text-white fw-bold">–</td>`;
+        }).join('')}
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+
+        relatorioFinal.innerHTML = html;
+        return;
+    }
+
+    if (modoResumoAluno) {
+        const totalAulas = obterDatasDisponiveis(dados).length;
+        const resumoPorAluno = montarResumoPorAluno(dados, totalAulas);
+
+        html += `
+      <h4 class="mb-3">Resumo por Aluno</h4>
+
+      <p><strong>Total de alunos:</strong> ${resumoPorAluno.length}</p>
+      <p><strong>Total de aulas ministradas:</strong> ${totalAulas}</p>
+
+      <table class="table table-bordered table-striped table-sm align-middle">
+        <thead class="table-dark">
+          <tr>
+            <th>Nome</th>
+            <th>Sobrenome</th>
+            <th>Presença</th>
+            <th>Falta</th>
+            <th>Participações</th>
+            <th>Total</th>
+            <th>Percentual</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${resumoPorAluno.map(aluno => `
+            <tr>
+              <td>${aluno.nome}</td>
+              <td>${aluno.sobrenome}</td>
+              <td class="bg-success text-white fw-bold">${aluno.presenca}</td>
+              <td class="bg-danger text-white fw-bold">${aluno.falta}</td>
+              <td class="fw-bold">${aluno.participacoes}</td>
+              <td class="fw-bold">${aluno.total}</td>
+              <td class="fw-bold">${aluno.percentual}%</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+
+        relatorioFinal.innerHTML = html;
+        return;
+    }
+
+    const dadosFiltrados = ordenarPorDataENome(
+        dataSelecionada
+            ? dados.filter(linha => linha.DataOriginal === dataSelecionada)
+            : dados
+    );
+
+    const titulo = dataSelecionada
+        ? `Lista de Presença em ${formatarData(dataSelecionada)}`
+        : 'Relatório consolidado';
+
+    const dadosTratados = dadosFiltrados.map(removerColunasOcultasEInternas);
+    const colunas = obterTodasAsColunas(dadosTratados);
+
+    html += `
+    <h4 class="mb-3">${titulo}</h4>
+
+    <p><strong>Total de linhas:</strong> ${dadosTratados.length}</p>
+
+    <div class="card mb-4">
+      <div class="card-body">
+        <h5 class="card-title">Totalizador de Presença</h5>
+        <canvas id="graficoStatus" style="max-height: 300px;"></canvas>
+      </div>
+    </div>
+
+    <table class="table table-bordered table-striped table-sm align-middle">
+      <thead class="table-dark">
+        <tr>
+          ${colunas.map(coluna => `<th>${coluna}</th>`).join('')}
+        </tr>
+      </thead>
+      <tbody>
+  `;
+
+    dadosTratados.forEach(linha => {
+        html += `
+      <tr>
+        ${colunas.map(coluna => {
+            const valor = linha[coluna] ?? '';
+
+            if (coluna === 'Status' && valor === 'Presente') {
+                return `<td class="bg-success text-white fw-bold">${valor}</td>`;
+            }
+
+            if (coluna === 'Status' && valor === 'Falta') {
+                return `<td class="bg-danger text-white fw-bold">${valor}</td>`;
+            }
+
+            return `<td>${valor}</td>`;
+        }).join('')}
+      </tr>
+    `;
+    });
+
+    html += `
+      </tbody>
+    </table>
+  `;
+
+    relatorioFinal.innerHTML = html;
+
+    renderizarGraficoStatus(dadosTratados);
+}
+
+function selecionarData(data) {
+    modoConsolidadoAluno = false;
+    modoResumoAluno = false;
+    dataSelecionada = data;
+    imprimirRelatorioConsolidado(dadosConsolidados);
+}
+
+function selecionarData(data) {
+    modoConsolidadoAluno = false;
+    modoResumoAluno = false;
+    dataSelecionada = data;
+    imprimirRelatorioConsolidado(dadosConsolidados);
+}
+
+function selecionarResumoAluno() {
+    modoConsolidadoAluno = false;
+    modoResumoAluno = true;
+    dataSelecionada = null;
+    imprimirRelatorioConsolidado(dadosConsolidados);
+}
+
+function selecionarConsolidadoAluno() {
+    modoConsolidadoAluno = true;
+    modoResumoAluno = false;
+    dataSelecionada = null;
+    imprimirRelatorioConsolidado(dadosConsolidados);
+}
+
+function removerColunasOcultasEInternas(linha) {
+    const novaLinha = { ...linha };
+
+    delete novaLinha.DataOriginal;
+    delete novaLinha.pastaOrigem;
+    delete novaLinha.arquivoOrigem;
+    delete novaLinha.numeroLinha;
+
+    return novaLinha;
+}
+
+function obterDatasDisponiveis(dados) {
+    return Array.from(
+        new Set(
+            dados
+                .map(linha => linha.DataOriginal)
+                .filter(Boolean)
+        )
+    ).sort();
+}
+
+function formatarData(dataIso) {
+    if (!dataIso) return '';
+
+    const partes = dataIso.split('-');
+
+    if (partes.length !== 3) {
+        return dataIso;
+    }
+
+    return `${partes[2]}/${partes[1]}/${partes[0]}`;
+}
+
 function obterContextoDoArquivo(file) {
     const caminho = file.webkitRelativePath || file.name;
-
     const partes = caminho.split('/');
 
-    // Exemplo:
-    // PastaRaiz/2026-02-27 20_30 Bruna Corte - Estatuto.../arquivo.xlsx
     const nomePasta = partes.length >= 2 ? partes[partes.length - 2] : '';
-
     const data = extrairDataDoNome(nomePasta);
 
     return {
@@ -137,7 +504,6 @@ function converterDuracaoParaMinutos(valor) {
 
     const texto = String(valor).trim().toLowerCase();
 
-    // Exemplo: "1 h 19 min", "2 h", "1h 05 min"
     if (/\d+\s*h\b/.test(texto)) {
         const matchHoras = texto.match(/(\d+)\s*h\b/);
         const matchMinutos = texto.match(/(\d+)\s*min\b/);
@@ -148,13 +514,11 @@ function converterDuracaoParaMinutos(valor) {
         return horas * 60 + minutos;
     }
 
-    // Exemplo: "25 min", "25 minutos"
     const matchMinutosTexto = texto.match(/(\d+)\s*min/);
     if (matchMinutosTexto) {
         return Number(matchMinutosTexto[1]);
     }
 
-    // Exemplo: 00:25:30 ou 25:30
     const matchHorario = texto.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
 
     if (matchHorario) {
@@ -187,46 +551,6 @@ function imprimirResumoArquivo(item) {
   `;
 }
 
-function imprimirRelatorioConsolidado(dados) {
-    if (!dados.length) {
-        relatorioFinal.innerHTML = `
-      <div class="alert alert-warning">
-        Nenhum dado encontrado.
-      </div>
-    `;
-        return;
-    }
-
-    const colunas = obterTodasAsColunas(dados);
-
-    let html = `
-    <p><strong>Total consolidado de linhas:</strong> ${dados.length}</p>
-
-    <table class="table table-bordered table-striped table-sm align-middle">
-      <thead class="table-dark">
-        <tr>
-          ${colunas.map(coluna => `<th>${coluna}</th>`).join('')}
-        </tr>
-      </thead>
-      <tbody>
-  `;
-
-    dados.forEach(linha => {
-        html += `
-      <tr>
-        ${colunas.map(coluna => `<td>${linha[coluna] ?? ''}</td>`).join('')}
-      </tr>
-    `;
-    });
-
-    html += `
-      </tbody>
-    </table>
-  `;
-
-    relatorioFinal.innerHTML = html;
-}
-
 function obterTodasAsColunas(dados) {
     const colunas = new Set();
 
@@ -239,14 +563,124 @@ function obterTodasAsColunas(dados) {
 
 function limparTela() {
     dadosConsolidados = [];
+    dataSelecionada = null;
     resumoArquivos.innerHTML = '';
     relatorioFinal.innerHTML = '';
     alerta.className = 'alert d-none mt-4';
     alerta.innerHTML = '';
     btnExportar.classList.add('d-none');
+
+    blocoResumoArquivos.classList.add('d-none');
+    iconeCollapseResumoArquivos.innerText = '▶';
+    const collapseInstance = bootstrap.Collapse.getOrCreateInstance(collapseResumoArquivos, {
+        toggle: false,
+    });
+    collapseInstance.hide();
 }
 
 function exibirAlerta(mensagem, tipo) {
     alerta.className = `alert alert-${tipo} mt-4`;
     alerta.innerHTML = mensagem;
 }
+
+function renderizarGraficoStatus(dados) {
+
+    const totalPresente = dados.filter(linha => linha.Status === 'Presente').length;
+
+    const totalFalta = dados.filter(linha => linha.Status === 'Falta').length;
+
+    const canvas = document.getElementById('graficoStatus');
+
+    if (!canvas) return;
+
+    if (graficoStatus) {
+
+        graficoStatus.destroy();
+
+    }
+
+    graficoStatus = new Chart(canvas, {
+
+        type: 'doughnut',
+
+        data: {
+
+            labels: ['Presente', 'Falta'],
+
+            datasets: [
+
+                {
+
+                    data: [totalPresente, totalFalta],
+
+                    backgroundColor: ['#198754', '#dc3545'],
+
+                },
+
+            ],
+
+        },
+
+        options: {
+
+            responsive: true,
+
+            plugins: {
+
+                legend: {
+
+                    position: 'bottom',
+
+                },
+
+            },
+
+        },
+
+    });
+
+}
+
+function montarConsolidadoPorAluno(dados, datasAulas) {
+    const mapa = {};
+
+    dados.forEach(linha => {
+        const nome = String(linha['Nome'] || '').trim();
+        const sobrenome = String(linha['Sobrenome'] || '').trim();
+
+        const chave = `${nome}|${sobrenome}`.toLowerCase();
+
+        if (!mapa[chave]) {
+            mapa[chave] = {
+                nome,
+                sobrenome,
+                presencasPorData: {},
+            };
+
+            datasAulas.forEach(data => {
+                mapa[chave].presencasPorData[data] = 0;
+            });
+        }
+
+        if (linha.Status === 'Presente' && linha.DataOriginal) {
+            mapa[chave].presencasPorData[linha.DataOriginal] = 1;
+        }
+    });
+
+    return Object.values(mapa).sort((a, b) => {
+        const nomeA = `${a.nome} ${a.sobrenome}`;
+        const nomeB = `${b.nome} ${b.sobrenome}`;
+
+        return nomeA.localeCompare(nomeB, 'pt-BR', {
+            sensitivity: 'base',
+        });
+    });
+}
+
+collapseResumoArquivos.addEventListener('show.bs.collapse', () => {
+    iconeCollapseResumoArquivos.innerText = '▼';
+});
+
+collapseResumoArquivos.addEventListener('hide.bs.collapse', () => {
+    iconeCollapseResumoArquivos.innerText = '▶';
+});
