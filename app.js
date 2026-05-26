@@ -27,7 +27,11 @@ btnProcessar.addEventListener('click', async () => {
 
     const arquivosExcel = files.filter(file => {
         const nome = file.name.toLowerCase();
-        return nome.endsWith('.xlsx') || nome.endsWith('.xls');
+
+        return (
+            !nome.startsWith('~$') &&
+            (nome.endsWith('.xlsx') || nome.endsWith('.xls'))
+        );
     });
 
     if (!arquivosExcel.length) {
@@ -39,20 +43,24 @@ btnProcessar.addEventListener('click', async () => {
         btnProcessar.disabled = true;
         btnProcessar.innerText = 'Processando...';
 
-        for (const file of arquivosExcel) {
+        const promessas = arquivosExcel.map(file => {
             const contexto = obterContextoDoArquivo(file);
-            const linhas = await processarArquivoExcel(file, contexto);
 
-            dadosConsolidados.push(...linhas);
+            return processarArquivoExcel(file, contexto)
+                .then(linhas => {
+                    dadosConsolidados.push(...linhas);
 
-            imprimirResumoArquivo({
-                arquivo: file.name,
-                caminho: file.webkitRelativePath,
-                pasta: contexto.nomePasta,
-                data: formatarData(contexto.data),
-                linhas: linhas.length,
-            });
-        }
+                    imprimirResumoArquivo({
+                        arquivo: file.name,
+                        caminho: file.webkitRelativePath,
+                        pasta: contexto.nomePasta,
+                        data: formatarData(contexto.data),
+                        linhas: linhas.length,
+                    });
+                });
+        });
+
+        await Promise.all(promessas);
 
         imprimirRelatorioConsolidado(dadosConsolidados);
 
@@ -418,13 +426,6 @@ function imprimirRelatorioConsolidado(dados) {
     relatorioFinal.innerHTML = html;
 
     renderizarGraficoStatus(dadosTratados);
-}
-
-function selecionarData(data) {
-    modoConsolidadoAluno = false;
-    modoResumoAluno = false;
-    dataSelecionada = data;
-    imprimirRelatorioConsolidado(dadosConsolidados);
 }
 
 function selecionarData(data) {
